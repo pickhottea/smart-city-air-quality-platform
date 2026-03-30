@@ -1,0 +1,17 @@
+{
+  "name": "pipeline_run_log",
+  "format": "jsonl",
+  "fields": [
+    "run_id",
+    "pipeline_name",
+    "city",
+    "source_name",
+    "started_at",
+    "finished_at",
+    "status",
+    "rows_in",
+    "rows_out",
+    "rows_flagged",
+    "error_count"
+  ]
+}

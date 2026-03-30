@@ -1,0 +1,13 @@
+{
+  "name": "quality_metrics_daily",
+  "format": "jsonl",
+  "fields": [
+    "metric_date",
+    "city",
+    "pollutant",
+    "null_rate",
+    "duplicate_rate",
+    "outlier_rate",
+    "pass_rate"
+  ]
+}

@@ -1,0 +1,12 @@
+city: molina_de_segura
+source_name: molina_de_segura_public_portal
+entity_type: AirQualityObserved
+base_url: ""
+fiware_service: ""
+fiware_servicepath: ""
+attrs:
+  - co
+  - no2
+  - o3
+  - so2
+limit: 500

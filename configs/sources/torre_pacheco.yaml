@@ -1,0 +1,12 @@
+city: torre_pacheco
+source_name: torre_pacheco_public_portal
+entity_type: AirQualityObserved
+base_url: https://torrepacheco-opendata.hopu.eu/api/datasources/proxy/2/v2/entities
+fiware_service: AirQuality
+fiware_servicepath: /torrepacheco
+attrs:
+  - co
+  - no2
+  - o3
+  - so2
+limit: 500

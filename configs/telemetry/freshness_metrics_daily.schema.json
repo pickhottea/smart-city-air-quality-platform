@@ -1,0 +1,12 @@
+{
+  "name": "freshness_metrics_daily",
+  "format": "jsonl",
+  "fields": [
+    "metric_date",
+    "city",
+    "entity_type",
+    "freshness_lag_minutes",
+    "latest_observed_at",
+    "latest_ingested_at"
+  ]
+}

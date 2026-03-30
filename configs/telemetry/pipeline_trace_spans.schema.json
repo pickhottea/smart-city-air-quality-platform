@@ -1,0 +1,14 @@
+{
+  "name": "pipeline_trace_spans",
+  "format": "jsonl",
+  "fields": [
+    "trace_id",
+    "span_id",
+    "parent_span_id",
+    "step_name",
+    "started_at",
+    "finished_at",
+    "duration_ms",
+    "status"
+  ]
+}
