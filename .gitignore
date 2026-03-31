@@ -12,3 +12,5 @@ data/bronze/
 tmp/
 state/
 *.tmp
+data/silver/
+data/gold/
