@@ -1,0 +1,24 @@
+city: apba
+source_name: apba_public_portal
+entity_type: AirQualityObserved
+
+base_url: "https://torrepacheco-opendata.hopu.eu/api/datasources/proxy/1/_sql"
+
+fiware_service: ""
+fiware_servicepath: "/apba"
+
+attrs:
+  - co
+  - no2
+  - o3
+  - so2
+  - pm10
+  - pm25
+  - airqualityindex
+  - airqualitylevel
+  - reliability
+  - dateobserved
+  - refpointofinterest
+  - operationalstatus
+
+limit: 500
