@@ -14,3 +14,4 @@ state/
 *.tmp
 data/silver/
 data/gold/
+data/telemetry/
