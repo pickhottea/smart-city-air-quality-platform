@@ -453,7 +453,7 @@ Emit:
 
 ## 9. Script responsibility map
 
-### 9.1 `scripts/pull_crate_month.sh`
+### 9.1 `scripts/linux/pull_crate_month.sh`
 
 Responsible for emitting:
 
@@ -463,7 +463,7 @@ Responsible for emitting:
 - download errors
 - source-level context
 
-### 9.2 `scripts/pull_crate_202307_202509.sh`
+### 9.2 `scripts/linux/pull_crate_202307_202509.sh`
 
 Responsible for emitting:
 
@@ -472,7 +472,7 @@ Responsible for emitting:
 - aggregate success/failure counters
 - retry/error events
 
-### 9.3 `scripts/build_silver_table.py`
+### 9.3 `spark/jobs/build_silver_table.py`
 
 Responsible for emitting:
 
@@ -485,7 +485,7 @@ Responsible for emitting:
 - row-count metrics
 - quality metrics where available
 
-### 9.4 `scripts/build_gold_hourly_table.py`
+### 9.4 `spark/jobs/build_gold_hourly_table.py`
 
 Responsible for emitting:
 
@@ -496,7 +496,7 @@ Responsible for emitting:
 - gold write span
 - output row metrics
 
-### 9.5 `scripts/build_telemetry_metrics.py`
+### 9.5 `spark/jobs/build_telemetry_metrics.py`
 
 Responsible for:
 

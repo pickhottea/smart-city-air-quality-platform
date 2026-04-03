@@ -75,8 +75,8 @@ Path:
 
 Used by:
 
-- `scripts/pull_crate_month.sh`
-- `scripts/pull_crate_202307_202509.sh`
+- `scripts/linux/pull_crate_month.sh`
+- `scripts/linux/pull_crate_202307_202509.sh`
 
 ### 3.2 Python helper
 
@@ -86,9 +86,9 @@ Path:
 
 Used by:
 
-- `scripts/build_silver_table.py`
-- `scripts/build_gold_hourly_table.py`
-- `scripts/build_telemetry_metrics.py`
+- `spark/jobs/build_silver_table.py`
+- `spark/jobs/build_gold_hourly_table.py`
+- `spark/jobs/build_telemetry_metrics.py`
 
 ### 3.3 Optional support modules
 

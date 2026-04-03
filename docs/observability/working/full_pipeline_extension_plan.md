@@ -41,17 +41,17 @@ The rollout order is:
 
 ### Phase A
 Already done or in progress:
-- `scripts/pull_crate_month.sh`
-- `scripts/build_silver_table.py`
-- `scripts/build_gold_hourly_table.py`
+- `scripts/linux/pull_crate_month.sh`
+- `spark/jobs/build_silver_table.py`
+- `spark/jobs/build_gold_hourly_table.py`
 
 ### Phase B
 Extend orchestration coverage to:
-- `scripts/pull_crate_202307_202509.sh`
+- `scripts/linux/pull_crate_202307_202509.sh`
 
 ### Phase C
 Extend summary/rollup behavior to:
-- `scripts/build_telemetry_metrics.py`
+- `spark/jobs/build_telemetry_metrics.py`
 
 ### Phase D
 Add quality/freshness curated outputs from raw events and Gold/Silver results.
@@ -63,28 +63,28 @@ Do not start by instrumenting rollup before the runtime path is stable.
 
 ## 4. Script inventory and observability role
 
-### 4.1 `scripts/pull_crate_month.sh`
+### 4.1 `scripts/linux/pull_crate_month.sh`
 Role:
 - atomic ingestion unit
 - source-level runtime telemetry producer
 
-### 4.2 `scripts/pull_crate_202307_202509.sh`
+### 4.2 `scripts/linux/pull_crate_202307_202509.sh`
 Role:
 - orchestration wrapper over many month-level runs
 - fan-out telemetry producer
 - aggregate retry/error surface
 
-### 4.3 `scripts/build_silver_table.py`
+### 4.3 `spark/jobs/build_silver_table.py`
 Role:
 - Spark standardization stage
 - QC-related telemetry producer
 
-### 4.4 `scripts/build_gold_hourly_table.py`
+### 4.4 `spark/jobs/build_gold_hourly_table.py`
 Role:
 - Spark aggregation stage
 - downstream analytical output telemetry producer
 
-### 4.5 `scripts/build_telemetry_metrics.py`
+### 4.5 `spark/jobs/build_telemetry_metrics.py`
 Role:
 - rollup
 - compaction
@@ -120,7 +120,7 @@ data/telemetry/curated/error_log.csv
 
 ## 6. Full script emission map
 
-### 6.1 `scripts/pull_crate_month.sh`
+### 6.1 `scripts/linux/pull_crate_month.sh`
 
 ### Emits run events
 
@@ -147,7 +147,7 @@ data/telemetry/curated/error_log.csv
 - file write failure
 - telemetry sink failure
 
-### 6.2 `scripts/pull_crate_202307_202509.sh`
+### 6.2 `scripts/linux/pull_crate_202307_202509.sh`
 
 ### Emits run events
 
@@ -173,7 +173,7 @@ data/telemetry/curated/error_log.csv
 - retry exhaustion
 - orchestration-level sink failure
 
-### 6.3 `scripts/build_silver_table.py`
+### 6.3 `spark/jobs/build_silver_table.py`
 
 ### Emits spans
 
@@ -203,7 +203,7 @@ data/telemetry/curated/error_log.csv
 - silver write failure
 - telemetry sink failure
 
-### 6.4 `scripts/build_gold_hourly_table.py`
+### 6.4 `spark/jobs/build_gold_hourly_table.py`
 
 ### Emits spans
 
@@ -228,7 +228,7 @@ data/telemetry/curated/error_log.csv
 - output write failure
 - telemetry sink failure
 
-### 6.5 `scripts/build_telemetry_metrics.py`
+### 6.5 `spark/jobs/build_telemetry_metrics.py`
 
 ### Emits spans
 

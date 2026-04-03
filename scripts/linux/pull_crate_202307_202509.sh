@@ -27,7 +27,7 @@ for city in "${cities[@]}"; do
     for month in "${months[@]}"; do
       echo "===================================="
       echo "$city $pollutant $month"
-      bash scripts/pull_crate_month.sh "$city" "$pollutant" "$month"
+      bash scripts/linux/pull_crate_month.sh "$city" "$pollutant" "$month"
     done
   done
 done

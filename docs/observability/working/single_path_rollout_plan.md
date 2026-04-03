@@ -41,22 +41,22 @@ The single-path rollout is considered successful when one end-to-end run:
 
 ### Step 1
 
-`scripts/pull_crate_month.sh`
+`scripts/linux/pull_crate_month.sh`
 
 ### Step 2
 
-`scripts/build_silver_table.py`
+`spark/jobs/build_silver_table.py`
 
 ### Step 3
 
-`scripts/build_gold_hourly_table.py`
+`spark/jobs/build_gold_hourly_table.py`
 
 This path is the minimum viable runtime observability implementation.
 
 Do not start rollout with:
 
-- `scripts/pull_crate_202307_202509.sh`
-- `scripts/build_telemetry_metrics.py`
+- `scripts/linux/pull_crate_202307_202509.sh`
+- `spark/jobs/build_telemetry_metrics.py`
 
 Those are phase-2 extensions.
 
@@ -153,7 +153,7 @@ Use rollup logic to turn raw runtime events into curated CSV outputs.
 
 ## 8. Script-level emission points for phase 1
 
-### 8.1 `scripts/pull_crate_month.sh`
+### 8.1 `scripts/linux/pull_crate_month.sh`
 
 This script must emit:
 
@@ -189,7 +189,7 @@ This script must emit:
 - `batch_month`
 - `source_name`
 
-### 8.2 `scripts/build_silver_table.py`
+### 8.2 `spark/jobs/build_silver_table.py`
 
 This script must emit:
 
@@ -221,7 +221,7 @@ This script must emit:
 - QC rule execution failure
 - telemetry sink failure
 
-### 8.3 `scripts/build_gold_hourly_table.py`
+### 8.3 `spark/jobs/build_gold_hourly_table.py`
 
 This script must emit:
 
