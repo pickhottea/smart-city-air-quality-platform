@@ -15,3 +15,13 @@ state/
 data/silver/
 data/gold/
 data/telemetry/
+
+# runtime data artifacts
+data/raw/
+data/bronze/
+data/silver/
+data/gold/
+data/telemetry/
+logs/ingestion/
+tmp/
+state/
