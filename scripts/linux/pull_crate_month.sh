@@ -4,9 +4,9 @@ set -euo pipefail
 
 BASE_URL="https://torrepacheco-opendata.hopu.eu/api/datasources/proxy/1/_sql"
 
-CITY="${1:?Usage: bash scripts/pull_crate_month.sh <apba|torrepacheco> <co|no2|o3|so2> <YYYY-MM>}"
-POLLUTANT="${2:?Usage: bash scripts/pull_crate_month.sh <apba|torrepacheco> <co|no2|o3|so2> <YYYY-MM>}"
-MONTH="${3:?Usage: bash scripts/pull_crate_month.sh <apba|torrepacheco> <co|no2|o3|so2> <YYYY-MM>}"
+CITY="${1:?Usage: bash scripts/linux/pull_crate_month.sh <apba|torrepacheco> <co|no2|o3|so2> <YYYY-MM>}"
+POLLUTANT="${2:?Usage: bash scripts/linux/pull_crate_month.sh <apba|torrepacheco> <co|no2|o3|so2> <YYYY-MM>}"
+MONTH="${3:?Usage: bash scripts/linux/pull_crate_month.sh <apba|torrepacheco> <co|no2|o3|so2> <YYYY-MM>}"
 
 case "$CITY" in
   apba) SERVICEPATH="/apba" ;;
