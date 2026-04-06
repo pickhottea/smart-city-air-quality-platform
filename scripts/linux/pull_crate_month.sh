@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${REPO_ROOT}"
+
+source telemetry/helpers/sh/telemetry.sh
 
 BASE_URL="https://torrepacheco-opendata.hopu.eu/api/datasources/proxy/1/_sql"
 
@@ -11,53 +15,159 @@ MONTH="${3:?Usage: bash scripts/linux/pull_crate_month.sh <apba|torrepacheco> <c
 case "$CITY" in
   apba) SERVICEPATH="/apba" ;;
   torrepacheco) SERVICEPATH="/torrepacheco" ;;
-  *) echo "Unsupported city"; exit 1 ;;
+  *) echo "Unsupported city: $CITY" >&2; exit 1 ;;
 esac
 
 case "$POLLUTANT" in
   co|no2|o3|so2) ;;
-  *) echo "Unsupported pollutant"; exit 1 ;;
+  *) echo "Unsupported pollutant: $POLLUTANT" >&2; exit 1 ;;
 esac
 
-START_TS=$(date -d "${MONTH}-01 00:00:00 UTC" +%s000)
-END_TS=$(date -d "${MONTH}-01 +1 month 00:00:00 UTC" +%s000)
+OUTPUT_DIR="data/bronze/crate/${CITY}/${POLLUTANT}"
+OUTPUT_FILE="${OUTPUT_DIR}/${MONTH}.csv"
+TMP_FILE="$(mktemp)"
+STEP_NAME="pull_crate_month"
+PIPELINE_NAME="crate_ingestion_monthly"
 
-RAW_DIR="data/raw/crate/${CITY}/${POLLUTANT}"
-BRONZE_DIR="data/bronze/crate/${CITY}/${POLLUTANT}"
-TMP_DIR="tmp"
+RUN_ID="${RUN_ID:-$(telemetry_new_run_id)}"
+TRACE_ID="${TRACE_ID:-$(telemetry_new_trace_id)}"
+SPAN_ID="$(telemetry_new_span_id)"
 
-mkdir -p "$RAW_DIR" "$BRONZE_DIR" "$TMP_DIR"
+cleanup() {
+  rm -f "${TMP_FILE}"
+}
 
-RAW_FILE="${RAW_DIR}/${MONTH}.json"
-CSV_FILE="${BRONZE_DIR}/${MONTH}.csv"
-BODY_FILE="${TMP_DIR}/${CITY}_${POLLUTANT}_${MONTH}.tmp"
+on_error() {
+  local rc="$1"
+  telemetry_emit_error_event \
+    "${RUN_ID}" \
+    "${TRACE_ID}" \
+    "${SPAN_ID}" \
+    "${STEP_NAME}" \
+    "script_failed" \
+    "pull failed with exit code ${rc}"
 
-echo "city=$CITY pollutant=$POLLUTANT month=$MONTH"
+  telemetry_emit_span_event \
+    "span_end" \
+    "${RUN_ID}" \
+    "${TRACE_ID}" \
+    "${SPAN_ID}" \
+    "" \
+    "${STEP_NAME}" \
+    "failed" \
+    "${CITY}" \
+    "${POLLUTANT}" \
+    "${MONTH}"
 
-SQL="SELECT time_index, ${POLLUTANT} AS value FROM mtairquality.etairqualityobserved WHERE fiware_servicepath = '${SERVICEPATH}' AND time_index >= ${START_TS} AND time_index < ${END_TS} AND ${POLLUTANT} IS NOT NULL ORDER BY time_index ASC"
+  telemetry_emit_run_event \
+    "run_end" \
+    "${RUN_ID}" \
+    "${TRACE_ID}" \
+    "${PIPELINE_NAME}" \
+    "failed" \
+    "pull failed"
 
-PAYLOAD=$(jq -nc --arg stmt "$SQL" '{stmt:$stmt}')
+  cleanup
+  exit "${rc}"
+}
 
-HTTP_CODE=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" \
-  -X POST "$BASE_URL" \
-  -H 'content-type: application/json' \
-  --data-raw "$PAYLOAD")
+trap 'rc=$?; on_error "$rc"' ERR
 
-cp "$BODY_FILE" "$RAW_FILE"
+mkdir -p "${OUTPUT_DIR}"
 
-if [[ "$HTTP_CODE" != "200" ]]; then
-  echo "HTTP error $HTTP_CODE"
-  sed -n '1,10p' "$RAW_FILE"
-  exit 1
+telemetry_emit_run_event \
+  "run_start" \
+  "${RUN_ID}" \
+  "${TRACE_ID}" \
+  "${PIPELINE_NAME}" \
+  "running" \
+  "pull start"
+
+telemetry_emit_span_event \
+  "span_start" \
+  "${RUN_ID}" \
+  "${TRACE_ID}" \
+  "${SPAN_ID}" \
+  "" \
+  "${STEP_NAME}" \
+  "running" \
+  "${CITY}" \
+  "${POLLUTANT}" \
+  "${MONTH}"
+
+# --------------------------------------------------
+# 把你原本的下載邏輯放在這裡
+# 目標：把結果寫到 ${TMP_FILE}
+# --------------------------------------------------
+
+YEAR_MONTH_START="${MONTH}-01"
+
+SQL="SELECT * FROM \"${SERVICEPATH}/${POLLUTANT}\" WHERE date_trunc('month', observed_at) = date_trunc('month', timestamp '${YEAR_MONTH_START}')"
+ENCODED_SQL="$(python3 - <<PY
+import urllib.parse
+print(urllib.parse.quote("""${SQL}"""))
+PY
+)"
+
+curl -fsSL "${BASE_URL}?sql=${ENCODED_SQL}" -o "${TMP_FILE}"
+
+# --------------------------------------------------
+# 下載後統計
+# --------------------------------------------------
+
+FILE_BYTES="$(wc -c < "${TMP_FILE}" | tr -d ' ')"
+
+if [ -s "${TMP_FILE}" ]; then
+  ROW_COUNT="$(awk 'NR>1' "${TMP_FILE}" | wc -l | tr -d ' ')"
+else
+  ROW_COUNT="0"
 fi
 
-ROWCOUNT=$(jq -r '.rowcount // 0' "$RAW_FILE")
+mv "${TMP_FILE}" "${OUTPUT_FILE}"
 
-{
-  echo "time_index,value"
-  if [[ "$ROWCOUNT" != "0" ]]; then
-    jq -r '.rows[] | [.[0], .[1]] | @csv' "$RAW_FILE"
-  fi
-} > "$CSV_FILE"
+telemetry_emit_metric_event \
+  "${RUN_ID}" \
+  "${TRACE_ID}" \
+  "${SPAN_ID}" \
+  "rows_downloaded_total" \
+  "${ROW_COUNT}" \
+  "count" \
+  "${CITY}" \
+  "${POLLUTANT}" \
+  "${MONTH}"
 
-echo "rows=$ROWCOUNT → $CSV_FILE"
+telemetry_emit_metric_event \
+  "${RUN_ID}" \
+  "${TRACE_ID}" \
+  "${SPAN_ID}" \
+  "file_bytes_written" \
+  "${FILE_BYTES}" \
+  "bytes" \
+  "${CITY}" \
+  "${POLLUTANT}" \
+  "${MONTH}"
+
+telemetry_emit_span_event \
+  "span_end" \
+  "${RUN_ID}" \
+  "${TRACE_ID}" \
+  "${SPAN_ID}" \
+  "" \
+  "${STEP_NAME}" \
+  "success" \
+  "${CITY}" \
+  "${POLLUTANT}" \
+  "${MONTH}"
+
+telemetry_emit_run_event \
+  "run_end" \
+  "${RUN_ID}" \
+  "${TRACE_ID}" \
+  "${PIPELINE_NAME}" \
+  "success" \
+  "pull success"
+
+trap - ERR
+cleanup
+
+echo "Wrote ${OUTPUT_FILE}"
