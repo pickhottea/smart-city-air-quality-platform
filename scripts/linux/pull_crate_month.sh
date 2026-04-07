@@ -7,165 +7,350 @@ cd "${REPO_ROOT}"
 source telemetry/helpers/sh/telemetry.sh
 
 BASE_URL="https://torrepacheco-opendata.hopu.eu/api/datasources/proxy/1/_sql"
+TABLE_NAME="mtairquality.etairqualityobserved"
 
 CITY="${1:?Usage: bash scripts/linux/pull_crate_month.sh <apba|torrepacheco> <co|no2|o3|so2> <YYYY-MM>}"
 POLLUTANT="${2:?Usage: bash scripts/linux/pull_crate_month.sh <apba|torrepacheco> <co|no2|o3|so2> <YYYY-MM>}"
 MONTH="${3:?Usage: bash scripts/linux/pull_crate_month.sh <apba|torrepacheco> <co|no2|o3|so2> <YYYY-MM>}"
 
-case "$CITY" in
-  apba) SERVICEPATH="/apba" ;;
-  torrepacheco) SERVICEPATH="/torrepacheco" ;;
-  *) echo "Unsupported city: $CITY" >&2; exit 1 ;;
-esac
-
-case "$POLLUTANT" in
-  co|no2|o3|so2) ;;
-  *) echo "Unsupported pollutant: $POLLUTANT" >&2; exit 1 ;;
-esac
-
-OUTPUT_DIR="data/bronze/crate/${CITY}/${POLLUTANT}"
-OUTPUT_FILE="${OUTPUT_DIR}/${MONTH}.csv"
-TMP_FILE="$(mktemp)"
 STEP_NAME="pull_crate_month"
 PIPELINE_NAME="crate_ingestion_monthly"
 
 RUN_ID="${RUN_ID:-$(telemetry_new_run_id)}"
 TRACE_ID="${TRACE_ID:-$(telemetry_new_trace_id)}"
 SPAN_ID="$(telemetry_new_span_id)"
+PARENT_SPAN_ID="${PARENT_SPAN_ID:-}"
+EMPTY_RESULT_EXIT_CODE="${EMPTY_RESULT_EXIT_CODE:-10}"
+
+# Bronze ingestion stays minimally filtered on value thresholds.
+# Negative and extreme measurements remain in Bronze so Silver QC can flag them explicitly.
+
+IS_NESTED="0"
+if [ -n "${PARENT_SPAN_ID}" ]; then
+  IS_NESTED="1"
+fi
+
+case "${CITY}" in
+  apba) SERVICEPATH="/apba" ;;
+  torrepacheco) SERVICEPATH="/torrepacheco" ;;
+  *)
+    echo "Unsupported city: ${CITY}" >&2
+    exit 1
+    ;;
+esac
+
+case "${POLLUTANT}" in
+  co|no2|o3|so2) ;;
+  *)
+    echo "Unsupported pollutant: ${POLLUTANT}" >&2
+    exit 1
+    ;;
+esac
+
+RAW_DIR="data/raw/crate/${CITY}/${POLLUTANT}"
+BRONZE_DIR="data/bronze/crate/${CITY}/${POLLUTANT}"
+RAW_FILE="${RAW_DIR}/${MONTH}.json"
+OUTPUT_FILE="${BRONZE_DIR}/${MONTH}.csv"
+
+TMP_JSON="$(mktemp)"
+TMP_CSV="$(mktemp)"
+TMP_BODY="$(mktemp)"
 
 cleanup() {
-  rm -f "${TMP_FILE}"
+  rm -f "${TMP_JSON}" "${TMP_CSV}" "${TMP_BODY}"
 }
 
-on_error() {
-  local rc="$1"
-  telemetry_emit_error_event \
+emit_run_start_if_root() {
+  if [ "${IS_NESTED}" = "0" ]; then
+    telemetry_emit_run_event \
+      "run_start" \
+      "${RUN_ID}" \
+      "${TRACE_ID}" \
+      "${PIPELINE_NAME}" \
+      "running" \
+      "pull start"
+  fi
+}
+
+emit_run_end_if_root() {
+  local status="$1"
+  local message="$2"
+
+  if [ "${IS_NESTED}" = "0" ]; then
+    telemetry_emit_run_event \
+      "run_end" \
+      "${RUN_ID}" \
+      "${TRACE_ID}" \
+      "${PIPELINE_NAME}" \
+      "${status}" \
+      "${message}"
+  fi
+}
+
+emit_span_start() {
+  telemetry_emit_span_event \
+    "span_start" \
     "${RUN_ID}" \
     "${TRACE_ID}" \
     "${SPAN_ID}" \
+    "${PARENT_SPAN_ID}" \
     "${STEP_NAME}" \
-    "script_failed" \
-    "pull failed with exit code ${rc}"
+    "running" \
+    "${CITY}" \
+    "${POLLUTANT}" \
+    "${MONTH}"
+}
+
+emit_span_end() {
+  local status="$1"
 
   telemetry_emit_span_event \
     "span_end" \
     "${RUN_ID}" \
     "${TRACE_ID}" \
     "${SPAN_ID}" \
-    "" \
+    "${PARENT_SPAN_ID}" \
     "${STEP_NAME}" \
-    "failed" \
+    "${status}" \
+    "${CITY}" \
+    "${POLLUTANT}" \
+    "${MONTH}"
+}
+
+emit_metric_events() {
+  local rows_downloaded="$1"
+  local raw_response_bytes="$2"
+  local file_bytes_written="$3"
+
+  telemetry_emit_metric_event \
+    "${RUN_ID}" \
+    "${TRACE_ID}" \
+    "${SPAN_ID}" \
+    "rows_downloaded_total" \
+    "${rows_downloaded}" \
+    "count" \
     "${CITY}" \
     "${POLLUTANT}" \
     "${MONTH}"
 
-  telemetry_emit_run_event \
-    "run_end" \
+  telemetry_emit_metric_event \
     "${RUN_ID}" \
     "${TRACE_ID}" \
-    "${PIPELINE_NAME}" \
-    "failed" \
-    "pull failed"
+    "${SPAN_ID}" \
+    "raw_response_bytes" \
+    "${raw_response_bytes}" \
+    "bytes" \
+    "${CITY}" \
+    "${POLLUTANT}" \
+    "${MONTH}"
 
+  telemetry_emit_metric_event \
+    "${RUN_ID}" \
+    "${TRACE_ID}" \
+    "${SPAN_ID}" \
+    "file_bytes_written" \
+    "${file_bytes_written}" \
+    "bytes" \
+    "${CITY}" \
+    "${POLLUTANT}" \
+    "${MONTH}"
+}
+
+fail_with_error() {
+  local rc="$1"
+  local error_type="$2"
+  local error_message="$3"
+  local run_message="$4"
+
+  telemetry_emit_error_event \
+    "${RUN_ID}" \
+    "${TRACE_ID}" \
+    "${SPAN_ID}" \
+    "${STEP_NAME}" \
+    "${error_type}" \
+    "${error_message}"
+
+  emit_span_end "failed"
+  emit_run_end_if_root "failed" "${run_message}"
+
+  trap - ERR
   cleanup
   exit "${rc}"
 }
 
-trap 'rc=$?; on_error "$rc"' ERR
+finish_empty_result_warning() {
+  local raw_bytes="$1"
 
-mkdir -p "${OUTPUT_DIR}"
+  emit_metric_events "0" "${raw_bytes}" "0"
 
-telemetry_emit_run_event \
-  "run_start" \
-  "${RUN_ID}" \
-  "${TRACE_ID}" \
-  "${PIPELINE_NAME}" \
-  "running" \
-  "pull start"
+  telemetry_emit_error_event \
+    "${RUN_ID}" \
+    "${TRACE_ID}" \
+    "${SPAN_ID}" \
+    "${STEP_NAME}" \
+    "empty_result" \
+    "no rows returned from source"
 
-telemetry_emit_span_event \
-  "span_start" \
-  "${RUN_ID}" \
-  "${TRACE_ID}" \
-  "${SPAN_ID}" \
-  "" \
-  "${STEP_NAME}" \
-  "running" \
-  "${CITY}" \
-  "${POLLUTANT}" \
-  "${MONTH}"
+  emit_span_end "warning"
+  emit_run_end_if_root "warning" "empty result"
 
-# --------------------------------------------------
-# 把你原本的下載邏輯放在這裡
-# 目標：把結果寫到 ${TMP_FILE}
-# --------------------------------------------------
+  trap - ERR
+  cleanup
+  echo "warning: empty result for city=${CITY} pollutant=${POLLUTANT} month=${MONTH}" >&2
+  exit "${EMPTY_RESULT_EXIT_CODE}"
+}
 
-YEAR_MONTH_START="${MONTH}-01"
+on_unexpected_error() {
+  local rc="$1"
+  fail_with_error \
+    "${rc}" \
+    "script_failed" \
+    "pull failed with exit code ${rc}" \
+    "pull failed"
+}
 
-SQL="SELECT * FROM \"${SERVICEPATH}/${POLLUTANT}\" WHERE date_trunc('month', observed_at) = date_trunc('month', timestamp '${YEAR_MONTH_START}')"
-ENCODED_SQL="$(python3 - <<PY
-import urllib.parse
-print(urllib.parse.quote("""${SQL}"""))
+trap 'rc=$?; on_unexpected_error "$rc"' ERR
+
+mkdir -p "${RAW_DIR}" "${BRONZE_DIR}"
+
+emit_run_start_if_root
+emit_span_start
+
+MONTH_START="${MONTH}-01 00:00:00"
+NEXT_MONTH_START="$(python3 - "${MONTH}" <<'PY'
+import sys
+from datetime import datetime
+
+month = datetime.strptime(sys.argv[1], "%Y-%m")
+if month.month == 12:
+    next_month = datetime(month.year + 1, 1, 1)
+else:
+    next_month = datetime(month.year, month.month + 1, 1)
+print(next_month.strftime("%Y-%m-%d 00:00:00"))
 PY
 )"
 
-curl -fsSL "${BASE_URL}?sql=${ENCODED_SQL}" -o "${TMP_FILE}"
+SQL="SELECT
+  time_index,
+  dateobserved AS observed_at,
+  '${CITY}' AS city,
+  '${POLLUTANT}' AS pollutant,
+  ${POLLUTANT} AS value,
+  fiware_servicepath,
+  refpointofinterest,
+  name,
+  operationalstatus,
+  reliability,
+  airqualityindex,
+  airqualitylevel
+FROM ${TABLE_NAME}
+WHERE fiware_servicepath = '${SERVICEPATH}'
+  AND time_index >= TIMESTAMP '${MONTH_START}'
+  AND time_index < TIMESTAMP '${NEXT_MONTH_START}'
+  AND ${POLLUTANT} IS NOT NULL
+ORDER BY time_index"
 
-# --------------------------------------------------
-# 下載後統計
-# --------------------------------------------------
+python3 - "${SQL}" > "${TMP_BODY}" <<'PY'
+import json
+import sys
+print(json.dumps({"stmt": sys.argv[1]}))
+PY
 
-FILE_BYTES="$(wc -c < "${TMP_FILE}" | tr -d ' ')"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
+CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-15}"
+CURL_MAX_TIME="${CURL_MAX_TIME:-120}"
 
-if [ -s "${TMP_FILE}" ]; then
-  ROW_COUNT="$(awk 'NR>1' "${TMP_FILE}" | wc -l | tr -d ' ')"
-else
-  ROW_COUNT="0"
+HTTP_OK="0"
+attempt=1
+max_attempts="${MAX_ATTEMPTS}"
+
+while [ "${attempt}" -le "${max_attempts}" ]; do
+  echo "info: curl attempt=${attempt} city=${CITY} pollutant=${POLLUTANT} month=${MONTH}" >&2
+
+  set +e
+  curl -fsSL \
+    --connect-timeout "${CURL_CONNECT_TIMEOUT}" \
+    --max-time "${CURL_MAX_TIME}" \
+    -H 'Content-Type: application/json' \
+    -X POST \
+    --data @"${TMP_BODY}" \
+    "${BASE_URL}" \
+    -o "${TMP_JSON}"
+  curl_rc="$?"
+  set -e
+
+  if [ "${curl_rc}" -eq 0 ]; then
+    HTTP_OK="1"
+    echo "info: curl success on attempt=${attempt} city=${CITY} pollutant=${POLLUTANT} month=${MONTH}" >&2
+    cp "${TMP_JSON}" "${RAW_FILE}"
+    break
+  fi
+
+  telemetry_emit_error_event \
+    "${RUN_ID}" \
+    "${TRACE_ID}" \
+    "${SPAN_ID}" \
+    "${STEP_NAME}" \
+    "source_retryable_failure" \
+    "curl failed attempt=${attempt} rc=${curl_rc} city=${CITY} pollutant=${POLLUTANT} month=${MONTH}"
+
+  if [ "${attempt}" -lt "${max_attempts}" ]; then
+    case "${attempt}" in
+      1) sleep 5 ;;
+      2) sleep 15 ;;
+      *) sleep 30 ;;
+    esac
+  fi
+
+  attempt="$((attempt + 1))"
+done
+
+if [ "${HTTP_OK}" != "1" ]; then
+  fail_with_error \
+    "1" \
+    "source_timeout_or_http_failure" \
+    "curl failed after ${max_attempts} attempts" \
+    "pull failed after retries"
 fi
 
-mv "${TMP_FILE}" "${OUTPUT_FILE}"
+  
+ROW_COUNT="$(python3 - "${TMP_JSON}" "${TMP_CSV}" <<'PY'
+import csv
+import json
+import sys
+from pathlib import Path
 
-telemetry_emit_metric_event \
-  "${RUN_ID}" \
-  "${TRACE_ID}" \
-  "${SPAN_ID}" \
-  "rows_downloaded_total" \
-  "${ROW_COUNT}" \
-  "count" \
-  "${CITY}" \
-  "${POLLUTANT}" \
-  "${MONTH}"
+payload_path = Path(sys.argv[1])
+csv_path = Path(sys.argv[2])
 
-telemetry_emit_metric_event \
-  "${RUN_ID}" \
-  "${TRACE_ID}" \
-  "${SPAN_ID}" \
-  "file_bytes_written" \
-  "${FILE_BYTES}" \
-  "bytes" \
-  "${CITY}" \
-  "${POLLUTANT}" \
-  "${MONTH}"
+payload = json.loads(payload_path.read_text())
+rows = payload.get("rows", [])
+cols = payload.get("cols", [])
+header = [c[0] if isinstance(c, list) and c else str(c) for c in cols]
 
-telemetry_emit_span_event \
-  "span_end" \
-  "${RUN_ID}" \
-  "${TRACE_ID}" \
-  "${SPAN_ID}" \
-  "" \
-  "${STEP_NAME}" \
-  "success" \
-  "${CITY}" \
-  "${POLLUTANT}" \
-  "${MONTH}"
+with csv_path.open("w", newline="") as fh:
+    writer = csv.writer(fh)
+    if header:
+        writer.writerow(header)
+    writer.writerows(rows)
 
-telemetry_emit_run_event \
-  "run_end" \
-  "${RUN_ID}" \
-  "${TRACE_ID}" \
-  "${PIPELINE_NAME}" \
-  "success" \
-  "pull success"
+print(len(rows))
+PY
+)"
+
+RAW_BYTES="$(wc -c < "${RAW_FILE}" | tr -d ' ')"
+
+if [ "${ROW_COUNT}" = "0" ]; then
+  finish_empty_result_warning "${RAW_BYTES}"
+fi
+
+mv "${TMP_CSV}" "${OUTPUT_FILE}"
+
+CSV_BYTES="$(wc -c < "${OUTPUT_FILE}" | tr -d ' ')"
+
+emit_metric_events "${ROW_COUNT}" "${RAW_BYTES}" "${CSV_BYTES}"
+emit_span_end "success"
+emit_run_end_if_root "success" "pull success"
 
 trap - ERR
 cleanup

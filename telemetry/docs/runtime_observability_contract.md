@@ -161,43 +161,55 @@ These fields are not all required for every row, but emitters should populate th
 
 ## 5. Canonical status vocabulary
 
-To avoid inconsistent status labels, all telemetry emitters must use the following values.
-
 ### 5.1 Run status
-
-Allowed values:
-
 - `running`
 - `success`
+- `warning`
 - `failed`
 - `partial_success`
 - `incomplete`
 
 ### 5.2 Span status
-
-Allowed values:
-
 - `started`
 - `success`
+- `warning`
 - `failed`
 - `skipped`
 
 ### 5.3 Freshness status
-
-Allowed values:
-
 - `fresh`
 - `delayed`
 - `stale`
 - `unknown`
 
 ### 5.4 Quality status
-
-Allowed values:
-
 - `pass`
 - `warn`
 - `fail`
+
+### 5.5 Warning semantics
+`warning` is a valid operational status for non-fatal degraded outcomes.
+
+Examples:
+- a monthly extraction returns `empty_result`
+- a child batch job completes without rows for a valid city-pollutant-month slice
+- the parent batch completes with one or more child warnings but no fatal failures
+
+Warning outcomes must emit normal runtime telemetry and must remain distinguishable from both `success` and `failed`.
+
+### 5.6 Extraction behavior
+Historical CrateDB/Grafana extraction is hardened with retry, timeout, and backoff handling.
+
+Expected monthly extraction behavior:
+- `success` -> run end = `success`, span end = `success`, exit code `0`
+- `empty_result` -> run end = `warning`, span end = `warning`, structured error event with `error_type=empty_result`, exit code `10`
+- hard failure -> run end = `failed`, span end = `failed`, non-zero exit
+
+Expected batch behavior:
+- child exit `0` -> continue
+- child exit `10` -> continue and increment `warning_count`
+- fatal child non-zero -> fail batch
+- batch may complete with final status `warning` when warnings exist and no fatal failure occurs
 
 ---
 
@@ -340,6 +352,11 @@ Examples of valid metric names:
 - `quality_checks_failed_total`
 - `freshness_lag_minutes`
 - `spark_stage_duration_ms`
+
+Additional valid metric names include:
+
+- `raw_response_bytes`
+- `file_bytes_written`
 
 ### 7.4 `quality_metrics_daily.csv`
 

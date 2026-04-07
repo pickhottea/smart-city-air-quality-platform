@@ -25,3 +25,6 @@ data/telemetry/
 logs/ingestion/
 tmp/
 state/
+
+# operator-facing batch logs
+logs/backfill/

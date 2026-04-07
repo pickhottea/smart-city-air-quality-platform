@@ -207,10 +207,13 @@ Metric events represent runtime numeric signals emitted when they become known.
 
 Examples:
 
-- rows_downloaded_total
-- duplicate_rows_total
-- freshness_lag_minutes
-- spark_stage_duration_ms
+- `rows_downloaded_total`
+- `raw_response_bytes`
+- `file_bytes_written`
+- `duplicate_rows_total`
+- `freshness_lag_minutes`
+- `spark_stage_duration_ms`
+
 
 Primary raw sink:
 
@@ -220,6 +223,7 @@ Metric events are part of the core runtime telemetry contract in this project.
 
 This means metric emission is not optional side output.
 If the canonical metric sink cannot be written after one immediate retry, the pipeline run must fail.
+
 
 ### 6.4 Error events
 
@@ -235,6 +239,22 @@ Examples:
 Primary raw sink:
 
 `data/telemetry/runtime/error_events.jsonl`
+
+### 6.5 Warning handling model
+
+For shell-based extraction flows, `warning` is the canonical non-fatal status for valid but degraded outcomes such as `empty_result`.
+
+This allows:
+- monthly jobs to return a warning without being treated as fatal
+- parent batch orchestration to continue on child warnings
+- final batch state to preserve `warning_count` without collapsing warnings into `success`
+
+Warning outcomes do not require a separate event type.
+They are represented through canonical lifecycle events with warning status.
+
+Examples:
+- run warning -> `event_type=run_completed`, `status=warning`
+- span warning -> `event_type=span_end`, `status=warning`
 
 ---
 
@@ -397,6 +417,7 @@ Allowed values:
 
 - `running`
 - `success`
+- `warning`
 - `failed`
 - `partial_success`
 - `incomplete`
@@ -407,6 +428,7 @@ Allowed values:
 
 - `started`
 - `success`
+- `warning`
 - `failed`
 - `skipped`
 
@@ -1047,6 +1069,8 @@ without runtime logs, traces, errors, and metrics, the run is not operationally 
 ### 17.2 Core sink failure rule
 
 A core sink failure is defined as failure to write to the canonical sink after one immediate retry.
+A warning is not a core sink failure and does not invalidate the run by itself.
+A warning becomes operationally meaningful only when it is emitted through the canonical runtime telemetry paths.
 
 Allowed behavior:
 
