@@ -178,7 +178,6 @@ while true; do
       if [ "${child_rc}" -eq "${EMPTY_RESULT_EXIT_CODE}" ]; then
         batch_warning="1"
         warning_count="$((warning_count + 1))"
-        echo "warning: empty result for city=${city} pollutant=${pollutant} month=${month_cursor}" >&2
         continue
       fi
 

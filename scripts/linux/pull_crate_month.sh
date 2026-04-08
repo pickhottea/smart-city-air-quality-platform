@@ -196,7 +196,6 @@ finish_empty_result_warning() {
 
   trap - ERR
   cleanup
-  echo "warning: empty result for city=${CITY} pollutant=${POLLUTANT} month=${MONTH}" >&2
   exit "${EMPTY_RESULT_EXIT_CODE}"
 }
 
