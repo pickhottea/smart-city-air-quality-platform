@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from pyspark.sql import DataFrame, SparkSession, Window
+from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -12,22 +12,17 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from pipeline_observability.telemetry import init_telemetry
-
-
-DEFAULT_SILVER_INPUT = "data/silver/air_quality_long"
-DEFAULT_GOLD_ROOT = "data/gold"
-DEFAULT_HOURLY_OUTPUT = f"{DEFAULT_GOLD_ROOT}/hourly_pollutant_averages"
-DEFAULT_CITY_COMPARISON_OUTPUT = f"{DEFAULT_GOLD_ROOT}/city_comparison_hourly"
-DEFAULT_COVERAGE_OUTPUT = f"{DEFAULT_GOLD_ROOT}/hourly_completeness"
+from pipeline_observability.telemetry import TelemetryClient, init_telemetry
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build Gold hourly air-quality tables from Silver observations.")
-    parser.add_argument("--input", default=DEFAULT_SILVER_INPUT)
-    parser.add_argument("--hourly-output", default=DEFAULT_HOURLY_OUTPUT)
-    parser.add_argument("--city-comparison-output", default=DEFAULT_CITY_COMPARISON_OUTPUT)
-    parser.add_argument("--coverage-output", default=DEFAULT_COVERAGE_OUTPUT)
+    parser = argparse.ArgumentParser(
+        description="Build Gold hourly air-quality aggregates from Silver parquet."
+    )
+    parser.add_argument("--input", default="data/silver/air_quality_long")
+    parser.add_argument("--output", default="data/gold/hourly_air_quality")
+    parser.add_argument("--comparison-output", default="data/gold/hourly_city_comparison")
+    parser.add_argument("--coverage-output", default="data/gold/hourly_coverage")
     parser.add_argument("--mode", default="overwrite", choices=["overwrite", "append"])
     parser.add_argument("--pipeline-name", default="smart_city_air_quality")
     parser.add_argument("--source-name", default="silver_air_quality_long")
@@ -40,108 +35,77 @@ def parse_args() -> argparse.Namespace:
 
 def spark_session(app_name: str) -> SparkSession:
     return (
-        SparkSession.builder.appName(app_name)
+        SparkSession.builder
+        .appName(app_name)
         .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.sql.shuffle.partitions", "16")
+        .config("spark.default.parallelism", "8")
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+        .config("spark.sql.ansi.enabled", "false")
+        .config("spark.sql.files.maxPartitionBytes", str(64 * 1024 * 1024))
+        .config("spark.driver.memory", "3g")
         .getOrCreate()
     )
 
 
-def base_gold_input(df: DataFrame) -> DataFrame:
-    return (
-        df.filter(F.col("qc_status") != F.lit("rejected"))
-        .withColumn("observed_hour", F.date_trunc("hour", F.col("observed_at")))
-        .withColumn("metric_date", F.to_date(F.col("observed_at")))
-    )
+def build_hourly_gold(silver_df):
+    clean_df = silver_df.filter(F.col("qc_status") != F.lit("rejected"))
 
-
-def build_hourly_averages(df: DataFrame) -> DataFrame:
     return (
-        df.groupBy("city", "pollutant", "observed_hour")
+        clean_df
+        .withColumn("hour_bucket", F.date_trunc("hour", F.col("observed_at")))
+        .groupBy("hour_bucket", "city", "pollutant")
         .agg(
             F.avg("value").alias("avg_value"),
             F.min("value").alias("min_value"),
             F.max("value").alias("max_value"),
             F.count(F.lit(1)).alias("record_count"),
-            F.sum(F.when(F.col("qc_status") == "flagged", 1).otherwise(0)).alias("flagged_record_count"),
-            F.max("run_id").alias("run_id"),
+            F.sum(F.when(F.col("qc_status") == "flagged", 1).otherwise(0)).alias("flagged_count"),
         )
         .withColumn(
-            "quality_status",
-            F.when(F.col("flagged_record_count") > 0, F.lit("warn")).otherwise(F.lit("pass")),
+            "flagged_rate",
+            F.when(F.col("record_count") > 0, F.col("flagged_count") / F.col("record_count")).otherwise(F.lit(None))
         )
     )
 
 
-def build_city_comparison(hourly_df: DataFrame) -> DataFrame:
-    pairs = hourly_df.alias("left").join(
-        hourly_df.alias("right"),
-        on=[
-            F.col("left.pollutant") == F.col("right.pollutant"),
-            F.col("left.observed_hour") == F.col("right.observed_hour"),
-            F.col("left.city") < F.col("right.city"),
-        ],
-        how="inner",
-    )
-
-    return pairs.select(
-        F.col("left.observed_hour").alias("observed_hour"),
-        F.col("left.pollutant").alias("pollutant"),
-        F.col("left.city").alias("city_left"),
-        F.col("right.city").alias("city_right"),
-        F.col("left.avg_value").alias("avg_value_left"),
-        F.col("right.avg_value").alias("avg_value_right"),
-        (F.col("left.avg_value") - F.col("right.avg_value")).alias("avg_value_delta"),
-        F.col("left.record_count").alias("record_count_left"),
-        F.col("right.record_count").alias("record_count_right"),
-        F.greatest(F.col("left.run_id"), F.col("right.run_id")).alias("run_id"),
-    )
-
-
-def build_hourly_coverage(df: DataFrame) -> DataFrame:
-    flagged_expr = F.sum(F.when(F.col("qc_status") == "flagged", 1).otherwise(0))
-    total_expr = F.count(F.lit(1))
-    coverage_window = Window.partitionBy("city", "pollutant")
-
-    aggregated = (
-        df.groupBy("city", "pollutant", "observed_hour")
+def build_city_comparison(hourly_df):
+    return (
+        hourly_df
+        .groupBy("hour_bucket", "pollutant")
         .agg(
-            total_expr.alias("observed_records"),
-            flagged_expr.alias("flagged_records"),
-            F.max("run_id").alias("run_id"),
+            F.countDistinct("city").alias("city_count"),
+            F.avg("avg_value").alias("cross_city_avg_value"),
+            F.min("avg_value").alias("cross_city_min_value"),
+            F.max("avg_value").alias("cross_city_max_value"),
         )
-        .withColumn("expected_records", F.greatest(F.lit(1), F.max("observed_records").over(coverage_window)))
-        .withColumn("completeness_ratio", F.col("observed_records") / F.col("expected_records"))
         .withColumn(
-            "coverage_status",
-            F.when(F.col("completeness_ratio") >= F.lit(0.95), F.lit("pass"))
-            .when(F.col("completeness_ratio") >= F.lit(0.75), F.lit("warn"))
-            .otherwise(F.lit("fail")),
+            "cross_city_range",
+            F.col("cross_city_max_value") - F.col("cross_city_min_value")
         )
     )
 
-    return aggregated.select(
-        "city",
-        "pollutant",
-        "observed_hour",
-        "observed_records",
-        "expected_records",
-        "completeness_ratio",
-        "flagged_records",
-        "coverage_status",
-        "run_id",
+
+def build_hourly_coverage(silver_df):
+    clean_df = silver_df.filter(F.col("qc_status") != F.lit("rejected"))
+
+    return (
+        clean_df
+        .withColumn("hour_bucket", F.date_trunc("hour", F.col("observed_at")))
+        .groupBy("hour_bucket", "city", "pollutant")
+        .agg(
+            F.count(F.lit(1)).alias("records_available"),
+            F.sum(F.when(F.col("qc_status") == "flagged", 1).otherwise(0)).alias("records_flagged"),
+            F.sum(F.when(F.col("qc_status") == "pass", 1).otherwise(0)).alias("records_pass"),
+        )
     )
-
-
-def emit_output_metrics(telemetry, step_name: str, metric_name: str, df: DataFrame) -> int:
-    row_count = df.count()
-    telemetry.emit_metric(metric_name, row_count, "rows", step_name=step_name)
-    return row_count
 
 
 def main() -> int:
     args = parse_args()
-    run_id = args.run_id or f"run_build_gold_{Path(args.input).name}"
-    trace_id = args.trace_id or f"trace_build_gold_{Path(args.input).name}"
+    run_id = args.run_id or TelemetryClient.generate_id("run")
+    trace_id = args.trace_id or TelemetryClient.generate_id("trace")
 
     telemetry = init_telemetry(
         run_id=run_id,
@@ -149,96 +113,133 @@ def main() -> int:
         pipeline_name=args.pipeline_name,
         telemetry_dir=args.telemetry_dir,
     )
+
     telemetry.emit_run_event("run_initialized", "running")
     telemetry.emit_run_event("run_started", "running")
-    root_span = telemetry.start_span(step_name="build_gold_hourly_table", source_name=args.source_name)
 
-    spark: SparkSession | None = None
+    root_span = telemetry.start_span(
+        step_name="build_gold_hourly_table",
+        source_name=args.source_name,
+    )
+
+    spark = None
     try:
+        input_path = Path(args.input)
+        if not input_path.exists():
+            raise FileNotFoundError(f"Silver input not found: {args.input}")
+
         spark = spark_session(args.app_name)
 
-        read_span = telemetry.start_span("read_silver", parent_span_id=root_span.span_id, source_name=args.source_name)
+        read_span = telemetry.start_span(
+            "read_silver",
+            parent_span_id=root_span.span_id,
+            source_name=args.source_name,
+        )
         silver_df = spark.read.parquet(args.input)
-        silver_count = silver_df.count()
-        telemetry.emit_metric("rows_silver_read_total", silver_count, "rows", step_name="read_silver", source_name=args.source_name)
         telemetry.end_span(
             read_span.span_id,
             "read_silver",
             "success",
             parent_span_id=root_span.span_id,
-            rows_out=silver_count,
+            rows_in=None,
+            rows_out=None,
             source_name=args.source_name,
         )
 
-        working_df = base_gold_input(silver_df).cache()
-        working_count = working_df.count()
-        telemetry.emit_metric("rows_gold_input_total", working_count, "rows", step_name="read_silver", source_name=args.source_name)
-        telemetry.emit_metric(
-            "flagged_records_total",
-            working_df.filter(F.col("qc_status") == "flagged").count(),
-            "rows",
-            step_name="read_silver",
+        hourly_span = telemetry.start_span(
+            "build_gold_hourly",
+            parent_span_id=root_span.span_id,
             source_name=args.source_name,
         )
-
-        hourly_span = telemetry.start_span("build_gold_hourly", parent_span_id=root_span.span_id, source_name=args.source_name)
-        hourly_df = build_hourly_averages(working_df).cache()
-        hourly_count = emit_output_metrics(telemetry, "build_gold_hourly", "rows_gold_hourly_total", hourly_df)
+        hourly_df = build_hourly_gold(silver_df)
         telemetry.end_span(
             hourly_span.span_id,
             "build_gold_hourly",
             "success",
             parent_span_id=root_span.span_id,
-            rows_in=working_count,
-            rows_out=hourly_count,
+            rows_in=None,
+            rows_out=None,
             source_name=args.source_name,
         )
 
-        comparison_span = telemetry.start_span("build_city_comparison", parent_span_id=root_span.span_id, source_name=args.source_name)
-        city_comparison_df = build_city_comparison(hourly_df).cache()
-        city_comparison_count = emit_output_metrics(
-            telemetry,
+        comparison_span = telemetry.start_span(
             "build_city_comparison",
-            "rows_gold_city_comparison_total",
-            city_comparison_df,
+            parent_span_id=root_span.span_id,
+            source_name=args.source_name,
         )
+        comparison_df = build_city_comparison(hourly_df)
         telemetry.end_span(
             comparison_span.span_id,
             "build_city_comparison",
             "success",
             parent_span_id=root_span.span_id,
-            rows_in=hourly_count,
-            rows_out=city_comparison_count,
+            rows_in=None,
+            rows_out=None,
             source_name=args.source_name,
         )
 
-        coverage_span = telemetry.start_span("build_coverage", parent_span_id=root_span.span_id, source_name=args.source_name)
-        coverage_df = build_hourly_coverage(working_df).cache()
-        coverage_count = emit_output_metrics(telemetry, "build_coverage", "rows_gold_coverage_total", coverage_df)
+        coverage_span = telemetry.start_span(
+            "build_coverage",
+            parent_span_id=root_span.span_id,
+            source_name=args.source_name,
+        )
+        coverage_df = build_hourly_coverage(silver_df)
         telemetry.end_span(
             coverage_span.span_id,
             "build_coverage",
             "success",
             parent_span_id=root_span.span_id,
-            rows_in=working_count,
-            rows_out=coverage_count,
+            rows_in=None,
+            rows_out=None,
             source_name=args.source_name,
         )
 
-        write_hourly_span = telemetry.start_span("write_gold", parent_span_id=root_span.span_id, source_name=args.source_name)
-        hourly_df.write.mode(args.mode).parquet(args.hourly_output)
-        city_comparison_df.write.mode(args.mode).parquet(args.city_comparison_output)
-        coverage_df.write.mode(args.mode).parquet(args.coverage_output)
-        total_rows_out = hourly_count + city_comparison_count + coverage_count
-        telemetry.emit_metric("rows_gold_written_total", total_rows_out, "rows", step_name="write_gold", source_name=args.source_name)
+        write_span = telemetry.start_span(
+            "write_gold",
+            parent_span_id=root_span.span_id,
+            source_name=args.source_name,
+        )
+
+        (
+            hourly_df
+            .coalesce(1)
+            .write
+            .mode(args.mode)
+            .parquet(args.output)
+        )
+
+        (
+            comparison_df
+            .coalesce(1)
+            .write
+            .mode(args.mode)
+            .parquet(args.comparison_output)
+        )
+
+        (
+            coverage_df
+            .coalesce(1)
+            .write
+            .mode(args.mode)
+            .parquet(args.coverage_output)
+        )
+
+        telemetry.emit_metric(
+            "gold_write_completed",
+            1,
+            "run",
+            step_name="write_gold",
+            source_name=args.source_name,
+        )
+
         telemetry.end_span(
-            write_hourly_span.span_id,
+            write_span.span_id,
             "write_gold",
             "success",
             parent_span_id=root_span.span_id,
-            rows_in=working_count,
-            rows_out=total_rows_out,
-            artifact_path=args.hourly_output,
+            rows_in=None,
+            rows_out=None,
+            artifact_path=args.output,
             source_name=args.source_name,
         )
 
@@ -246,14 +247,13 @@ def main() -> int:
             root_span.span_id,
             "build_gold_hourly_table",
             "success",
-            rows_in=silver_count,
-            rows_out=total_rows_out,
-            artifact_path=args.hourly_output,
+            artifact_path=args.output,
             source_name=args.source_name,
         )
-        telemetry.emit_run_event("run_completed", "success", artifact_path=args.hourly_output)
+        telemetry.emit_run_event("run_completed", "success", artifact_path=args.output)
         return 0
-    except Exception as exc:  # noqa: BLE001
+
+    except Exception as exc:
         message = str(exc)
         telemetry.emit_error(
             step_name="build_gold_hourly_table",
@@ -268,15 +268,23 @@ def main() -> int:
             root_span.span_id,
             "build_gold_hourly_table",
             "failed",
-            artifact_path=args.hourly_output,
+            artifact_path=args.output,
             error_message=message,
             source_name=args.source_name,
         )
-        telemetry.emit_run_event("run_failed", "failed", error_message=message, artifact_path=args.hourly_output)
+        telemetry.emit_run_event(
+            "run_failed",
+            "failed",
+            error_message=message,
+            artifact_path=args.output,
+        )
         raise
     finally:
         if spark is not None:
-            spark.stop()
+            try:
+                spark.stop()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
