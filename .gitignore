@@ -28,3 +28,6 @@ state/
 
 # operator-facing batch logs
 logs/backfill/
+
+# accidental local runs from spark/jobs
+spark/jobs/data/
