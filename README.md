@@ -136,6 +136,26 @@ Rules:
 - runtime-observability design work defines the telemetry contract and helper model
 - the core pipeline branch consumes that telemetry contract during normal execution
 
+## Local environment
+
+Create and activate the project virtual environment, then install Python dependencies:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Required Python package
+
+The auto-ticket MVP depends on:
+
+- `PyYAML==6.0.3`
+
+This dependency is required by:
+
+- `spark/jobs/build_incident_candidates.py`
+
 ## Notes for local development
 
 - use the repository `.venv`

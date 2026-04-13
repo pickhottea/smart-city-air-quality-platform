@@ -1,0 +1,57 @@
+version: 1
+
+scope:
+  repository: smart-city-air-quality-platform
+  pipeline_name: smart_city_air_quality
+  mode: historical_backfill
+  exclude_run_id_prefixes:
+    - run_rollup_
+  latest_run_only: true
+  output_path: data/telemetry/curated/incident_candidates.csv
+
+defaults:
+  candidate_status: open_candidate
+  timestamp_utc: true
+
+rules:
+  run_failure:
+    enabled: true
+    statuses:
+      - failed
+      - incomplete
+    severity: critical
+    owner_role: technical_owner
+    source_table: pipeline_run_log.csv
+    evidence_path: data/telemetry/curated/pipeline_run_log.csv
+
+  quality_flag_rate:
+    enabled: true
+    flagged_rate_gt: 0.10
+    severity: medium
+    owner_role: data_steward
+    source_table: quality_metrics_daily.csv
+    evidence_path: data/telemetry/curated/quality_metrics_daily.csv
+
+  quality_rejected_rate:
+    enabled: true
+    rejected_rate_gt: 0.05
+    severity: high
+    owner_role: data_steward
+    source_table: quality_metrics_daily.csv
+    evidence_path: data/telemetry/curated/quality_metrics_daily.csv
+
+  critical_error:
+    enabled: true
+    severity_equals:
+      - critical
+    deduplicate_by:
+      - step_name
+      - error_type
+    severity: critical
+    owner_role: technical_owner
+    source_table: error_log.csv
+    evidence_path: data/telemetry/curated/error_log.csv
+
+  freshness:
+    enabled: false
+    reason: historical_backfill_not_blocking
